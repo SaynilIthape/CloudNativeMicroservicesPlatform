@@ -1,0 +1,39 @@
+
+services:
+  orders-db:
+    image: postgres:17
+    container_name: cloudnative-orders-db
+    environment:
+      POSTGRES_DB: cloudnative_orders_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - orders-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cloudnative_orders_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  orders-api:
+    image: orders-cloud-api:v3
+    container_name: cloudnative-orders-api
+    ports:
+      - "8081:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__OrdersDb: Host=orders-db;Port=5432;Database=cloudnative_orders_db;Username=postgres;Password=postgres
+    depends_on:
+      orders-db:
+        condition: service_healthy
+  inventory-api:
+    image: inventory-api:v1
+    container_name: cloudnative-inventory-api
+    ports:
+      - "8082:8080"
+
+volumes:
+  orders-postgres-data:

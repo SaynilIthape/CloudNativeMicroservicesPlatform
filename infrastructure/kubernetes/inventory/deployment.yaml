@@ -1,0 +1,26 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-api
+  namespace: cloudnative-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inventory-api
+  template:
+    metadata:
+      labels:
+        app: inventory-api
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: inventory-api-sa
+      containers:
+        - name: inventory-api
+          image: manufacturingai1993.azurecr.io/cloudnative-inventory-api:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP

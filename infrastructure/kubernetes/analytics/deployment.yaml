@@ -1,0 +1,26 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-api
+  namespace: cloudnative-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-api
+  template:
+    metadata:
+      labels:
+        app: analytics-api
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: analytics-api-sa
+      containers:
+        - name: analytics-api
+          image: manufacturingai1993.azurecr.io/cloudnative-analytics-api:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
