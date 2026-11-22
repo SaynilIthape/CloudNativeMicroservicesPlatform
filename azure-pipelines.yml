@@ -5,7 +5,7 @@ trigger:
       - main
 
 pool:
-  vmImage: ubuntu-latest
+  name: CloudNative-Local-Agent
 
 variables:
   azureServiceConnection: 'sc-cloudnative-platform-azure'
@@ -17,82 +17,55 @@ variables:
   namespace: 'cloudnative-platform'
 
 steps:
-
-# Step 1: Build and push Docker image
 - task: AzureCLI@2
-  displayName: 'Build and Push Analytics API to ACR'
+  displayName: 'Build and Push Analytics API'
   inputs:
     azureSubscription: '$(azureServiceConnection)'
-    scriptType: bash
+    scriptType: ps
     scriptLocation: inlineScript
     inlineScript: |
-      set -euo pipefail
+      $ErrorActionPreference = "Stop"
+      $image = "$(acrLoginServer)/$(imageRepository)"
+      $tag = "$(Build.BuildId)"
 
-      IMAGE="$(acrLoginServer)/$(imageRepository)"
-      TAG="$(Build.BuildId)"
+      Write-Host "Building Docker image..."
+      docker build -f src/Analytics.Api/Dockerfile -t "${image}:${tag}" src/Analytics.Api
+      if ($LASTEXITCODE -ne 0) { throw "Docker build failed" }
 
-      echo "Building Analytics API Docker image..."
-
-      docker build \
-        -f src/Analytics.Api/Dockerfile \
-        -t "$IMAGE:$TAG" \
-        src/Analytics.Api
-
-      echo "Logging in to Azure Container Registry..."
       az acr login --name "$(acrName)"
+      if ($LASTEXITCODE -ne 0) { throw "ACR login failed" }
 
-      echo "Pushing image to ACR..."
-      docker push "$IMAGE:$TAG"
+      docker push "${image}:${tag}"
+      if ($LASTEXITCODE -ne 0) { throw "Docker push failed" }
 
-      echo "Image pushed: $IMAGE:$TAG"
-
-# Step 2: Deploy to existing AKS
 - task: AzureCLI@2
   displayName: 'Deploy Analytics API to AKS'
   inputs:
     azureSubscription: '$(azureServiceConnection)'
-    scriptType: bash
+    scriptType: ps
     scriptLocation: inlineScript
     inlineScript: |
-      set -euo pipefail
+      $ErrorActionPreference = "Stop"
 
-      IMAGE="$(acrLoginServer)/$(imageRepository)"
-      TAG="$(Build.BuildId)"
-
-      echo "Installing kubectl and kubelogin..."
-      az aks install-cli \
-        --install-location "$AGENT_TEMPDIRECTORY/kubectl" \
-        --kubelogin-install-location "$AGENT_TEMPDIRECTORY/kubelogin"
-
-      export PATH="$AGENT_TEMPDIRECTORY:$PATH"
-
-      echo "Getting AKS credentials using Entra ID..."
-      az aks get-credentials \
-        --resource-group "$(resourceGroup)" \
-        --name "$(aksCluster)" \
-        --overwrite-existing \
+      az aks get-credentials `
+        --resource-group "$(resourceGroup)" `
+        --name "$(aksCluster)" `
+        --overwrite-existing `
         --format exec
+      if ($LASTEXITCODE -ne 0) { throw "AKS credentials failed" }
 
       kubelogin convert-kubeconfig -l azurecli
+      if ($LASTEXITCODE -ne 0) { throw "kubelogin conversion failed" }
 
-      echo "Applying Analytics Kubernetes manifests..."
-      kubectl apply \
-        -f infrastructure/kubernetes/analytics/deployment.yaml \
-        -f infrastructure/kubernetes/analytics/service.yaml \
-        -n "$(namespace)"
+      kubectl apply -f infrastructure/kubernetes/analytics/deployment.yaml -f infrastructure/kubernetes/analytics/service.yaml -n "$(namespace)"
+      if ($LASTEXITCODE -ne 0) { throw "Manifest application failed" }
 
-      echo "Updating Analytics API image..."
-      kubectl set image deployment/analytics-api \
-        analytics-api="$IMAGE:$TAG" \
-        -n "$(namespace)"
+      $image = "$(acrLoginServer)/$(imageRepository):$(Build.BuildId)"
+      kubectl set image deployment/analytics-api analytics-api=$image -n "$(namespace)"
+      if ($LASTEXITCODE -ne 0) { throw "Image update failed" }
 
-      echo "Waiting for rollout..."
-      kubectl rollout status deployment/analytics-api \
-        -n "$(namespace)" \
-        --timeout=180s
+      kubectl rollout status deployment/analytics-api -n "$(namespace)" --timeout=180s
+      if ($LASTEXITCODE -ne 0) { throw "Deployment rollout failed" }
 
-      echo "Deployment verification..."
       kubectl get deployment analytics-api -n "$(namespace)"
-      kubectl get pods -n "$(namespace)" -l app=analytics-api -o wide
-
-      echo "Analytics API deployment completed successfully!"
+      kubectl get pods -n "$(namespace)"
