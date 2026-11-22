@@ -1,0 +1,98 @@
+
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  azureServiceConnection: 'sc-cloudnative-platform-azure'
+  resourceGroup: 'rg-cloudnative-platform-dev'
+  aksCluster: 'aks-cloudnative-platform'
+  acrName: 'manufacturingai1993'
+  acrLoginServer: 'manufacturingai1993.azurecr.io'
+  imageRepository: 'cloudnative-analytics-api'
+  namespace: 'cloudnative-platform'
+
+steps:
+
+# Step 1: Build and push Docker image
+- task: AzureCLI@2
+  displayName: 'Build and Push Analytics API to ACR'
+  inputs:
+    azureSubscription: '$(azureServiceConnection)'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      set -euo pipefail
+
+      IMAGE="$(acrLoginServer)/$(imageRepository)"
+      TAG="$(Build.BuildId)"
+
+      echo "Building Analytics API Docker image..."
+
+      docker build \
+        -f src/Analytics.Api/Dockerfile \
+        -t "$IMAGE:$TAG" \
+        src/Analytics.Api
+
+      echo "Logging in to Azure Container Registry..."
+      az acr login --name "$(acrName)"
+
+      echo "Pushing image to ACR..."
+      docker push "$IMAGE:$TAG"
+
+      echo "Image pushed: $IMAGE:$TAG"
+
+# Step 2: Deploy to existing AKS
+- task: AzureCLI@2
+  displayName: 'Deploy Analytics API to AKS'
+  inputs:
+    azureSubscription: '$(azureServiceConnection)'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      set -euo pipefail
+
+      IMAGE="$(acrLoginServer)/$(imageRepository)"
+      TAG="$(Build.BuildId)"
+
+      echo "Installing kubectl and kubelogin..."
+      az aks install-cli \
+        --install-location "$AGENT_TEMPDIRECTORY/kubectl" \
+        --kubelogin-install-location "$AGENT_TEMPDIRECTORY/kubelogin"
+
+      export PATH="$AGENT_TEMPDIRECTORY:$PATH"
+
+      echo "Getting AKS credentials using Entra ID..."
+      az aks get-credentials \
+        --resource-group "$(resourceGroup)" \
+        --name "$(aksCluster)" \
+        --overwrite-existing \
+        --format exec
+
+      kubelogin convert-kubeconfig -l azurecli
+
+      echo "Applying Analytics Kubernetes manifests..."
+      kubectl apply \
+        -f infrastructure/kubernetes/analytics/deployment.yaml \
+        -f infrastructure/kubernetes/analytics/service.yaml \
+        -n "$(namespace)"
+
+      echo "Updating Analytics API image..."
+      kubectl set image deployment/analytics-api \
+        analytics-api="$IMAGE:$TAG" \
+        -n "$(namespace)"
+
+      echo "Waiting for rollout..."
+      kubectl rollout status deployment/analytics-api \
+        -n "$(namespace)" \
+        --timeout=180s
+
+      echo "Deployment verification..."
+      kubectl get deployment analytics-api -n "$(namespace)"
+      kubectl get pods -n "$(namespace)" -l app=analytics-api -o wide
+
+      echo "Analytics API deployment completed successfully!"
